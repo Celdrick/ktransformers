@@ -175,10 +175,10 @@ ENV PATH="/opt/miniconda3/bin:${PATH}"
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main \
     && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
-# Configure conda to use Tsinghua mirror
-RUN conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main \
-    && conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free \
-    && conda config --set show_channel_urls yes
+# # Configure conda to use Tsinghua mirror
+# RUN conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main \
+#     && conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free \
+#     && conda config --set show_channel_urls yes
 
 ########################################################
 ########## Dual Conda Environment Setup ################
