@@ -343,7 +343,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Install LLaMA-Factory in fine-tune env
 RUN --mount=type=cache,target=/root/.cache/pip \
     cd /workspace/LLaMA-Factory \
-    && /opt/miniconda3/envs/fine-tune/bin/pip install -e ".[torch,metrics]" --no-build-isolation
+    && /opt/miniconda3/envs/fine-tune/bin/pip install -e ".[torch,metrics]"
 
 # Install ktransformers wheel in fine-tune env
 RUN --mount=type=cache,target=/root/.cache/pip \
