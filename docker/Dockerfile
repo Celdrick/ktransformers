@@ -208,9 +208,9 @@ WORKDIR /workspace
 RUN conda create -n serve python=3.12 -y \
     && conda create -n fine-tune python=3.12 -y
 
-# Set pip mirror for both conda envs
-RUN /opt/miniconda3/envs/serve/bin/pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple \
-    && /opt/miniconda3/envs/fine-tune/bin/pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
+# # Set pip mirror for both conda envs
+# RUN /opt/miniconda3/envs/serve/bin/pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple \
+#     && /opt/miniconda3/envs/fine-tune/bin/pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 
 # Clone repositories
 # Use kvcache-ai/sglang fork with kimi_k2 branch
