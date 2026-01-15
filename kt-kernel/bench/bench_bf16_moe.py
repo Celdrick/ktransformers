@@ -1,10 +1,10 @@
 """
-Performance benchmark for FP8 MoE kernel (AVX implementation).
+Performance benchmark for native BF16 MoE kernel (AMX implementation).
 
-This benchmark measures the performance of the FP8 MoE operator with:
-- FP8 (E4M3) weights with 128x128 block-wise scaling
+This benchmark measures the performance of the BF16 MoE operator with:
+- Native BF16 weights (no quantization)
 - BF16 activations
-- AVX-512 DPBF16 compute path
+- AMX BF16 DPBF16PS compute path
 """
 
 import os
@@ -25,12 +25,11 @@ expert_num = 256
 hidden_size = 7168
 intermediate_size = 2048
 num_experts_per_tok = 8
-fp8_group_size = 128
 max_len = 25600
 
-layer_num = 2
+layer_num = 5
 qlen = 1
-warm_up_iter = 1000
+warm_up_iter = 100
 test_iter = 3000
 CPUINFER_PARAM = 80
 
@@ -39,7 +38,7 @@ CPUInfer = kt_kernel_ext.CPUInfer(CPUINFER_PARAM)
 # Result file path
 script_path = os.path.abspath(__file__)
 script_dir = os.path.dirname(script_path)
-json_path = os.path.join(script_dir, "bench_results.jsonl")
+json_path = os.path.join(script_dir, "bench_bf16_moe.jsonl")
 
 
 def get_git_commit():
@@ -88,75 +87,56 @@ def record_results(result, filename=json_path):
         f.write(json.dumps(result) + "\n")
 
 
-def generate_fp8_weights_direct(shape: tuple, group_size: int = 128):
+def generate_bf16_weights(shape: tuple):
     """
-    Directly generate random FP8 weights and e8m0 format scale_inv.
+    Generate random BF16 weights.
 
     Args:
         shape: (expert_num, n, k) - weight tensor shape
-        group_size: block size for scaling (128x128 blocks)
 
     Returns:
-        fp8_weights: uint8 tensor with random FP8 E4M3 values
-        scale_inv: fp32 tensor with e8m0 format (powers of 2)
+        bf16_weights: bfloat16 tensor with random values
     """
-    e, n, k = shape
-    n_blocks = n // group_size
-    k_blocks = k // group_size
-
-    # Directly generate random FP8 weights as uint8
-    # FP8 E4M3 format: 1 sign + 4 exp + 3 mantissa
-    # Valid range for normal numbers: exp 1-14 (0 is subnormal, 15 is special)
-    fp8_weights = torch.randint(0, 256, (e, n, k), dtype=torch.uint8, device="cuda").to("cpu").contiguous()
-
-    # Generate e8m0 format scale_inv (powers of 2)
-    # e8m0: 8-bit exponent only, no mantissa, bias = 127
-    # Generate random exponents in a reasonable range (e.g., -8 to 8)
-    exponents = torch.randint(-8, 9, (e, n_blocks, k_blocks), dtype=torch.int32, device="cuda").to("cpu").contiguous()
-    scale_inv = (2.0 ** exponents.float()).to(torch.float32).contiguous()
-
-    return fp8_weights, scale_inv
+    # Generate random BF16 weights with small values to avoid overflow
+    weights = (torch.randn(shape, dtype=torch.float32, device="cuda") / 100.0).to(torch.bfloat16).to("cpu").contiguous()
+    return weights
 
 
-def bench_fp8_moe():
-    """Benchmark FP8 MoE performance"""
+def bench_bf16_moe():
+    """Benchmark native BF16 MoE performance"""
     with torch.inference_mode():
         print("=" * 70)
-        print("FP8 MoE Kernel Performance Benchmark")
+        print("Native BF16 MoE Kernel Performance Benchmark")
         print("=" * 70)
 
-        # Generate FP8 weights directly (no quantization from fp32)
-        print("\nGenerating FP8 weights directly...")
+        # Generate BF16 weights
+        print("\nGenerating BF16 weights...")
         torch.manual_seed(42)
-        gate_fp8, gate_scales = generate_fp8_weights_direct(
-            (expert_num, intermediate_size, hidden_size), fp8_group_size
-        )
-        up_fp8, up_scales = generate_fp8_weights_direct((expert_num, intermediate_size, hidden_size), fp8_group_size)
-        down_fp8, down_scales = generate_fp8_weights_direct(
-            (expert_num, hidden_size, intermediate_size), fp8_group_size
-        )
+        gate_proj = generate_bf16_weights((expert_num, intermediate_size, hidden_size))
+        up_proj = generate_bf16_weights((expert_num, intermediate_size, hidden_size))
+        down_proj = generate_bf16_weights((expert_num, hidden_size, intermediate_size))
 
         physical_to_logical_map = torch.tensor(range(expert_num), device="cpu", dtype=torch.int64).contiguous()
 
         # Build MoE layers
-        print("Building FP8 MoE layers...")
+        print("Building BF16 MoE layers...")
         moes = []
         for _ in tqdm(range(layer_num), desc="Initializing MOEs"):
             config = kt_kernel_ext.moe.MOEConfig(expert_num, num_experts_per_tok, hidden_size, intermediate_size, 0)
             config.max_len = max_len
-            config.quant_config.bits = 8
-            config.quant_config.group_size = fp8_group_size
-            config.quant_config.zero_point = False
 
-            config.gate_proj = gate_fp8.data_ptr()
-            config.up_proj = up_fp8.data_ptr()
-            config.down_proj = down_fp8.data_ptr()
-            config.gate_scale = gate_scales.data_ptr()
-            config.up_scale = up_scales.data_ptr()
-            config.down_scale = down_scales.data_ptr()
+            # Set BF16 weight pointers (no scales needed)
+            config.gate_proj = gate_proj.data_ptr()
+            config.up_proj = up_proj.data_ptr()
+            config.down_proj = down_proj.data_ptr()
+
+            # No scales for BF16
+            config.gate_scale = 0
+            config.up_scale = 0
+            config.down_scale = 0
             config.pool = CPUInfer.backend_
 
-            moe = kt_kernel_ext.moe.AMXFP8_MOE(config)
+            moe = kt_kernel_ext.moe.AMXBF16_MOE(config)
             CPUInfer.submit(moe.load_weights_task(physical_to_logical_map.data_ptr()))
             CPUInfer.sync()
             moes.append(moe)
@@ -216,7 +196,6 @@ def bench_fp8_moe():
         # FLOPS calculation:
         # Each expert performs: gate(intermediate x hidden) + up(intermediate x hidden) + down(hidden x intermediate)
         # GEMM/GEMV: 2 * m * n * k flops (multiply + accumulate = 2 ops per element)
-        # For vector-matrix multiply (qlen=1): 2 * n * k per matrix
         flops_per_expert = (
             2 * intermediate_size * hidden_size  # gate
             + 2 * intermediate_size * hidden_size  # up
@@ -225,8 +204,8 @@ def bench_fp8_moe():
         total_flops = qlen * num_experts_per_tok * flops_per_expert * test_iter
         tflops = total_flops / total_time / 1e12
 
-        # Bandwidth calculation (FP8 = 1 byte per element)
-        bytes_per_elem = 1.0
+        # Bandwidth calculation (BF16 = 2 bytes per element)
+        bytes_per_elem = 2.0
         # Weight memory: gate + up + down per expert
         bandwidth = (
             hidden_size
@@ -238,13 +217,13 @@ def bench_fp8_moe():
             * test_iter
             / total_time
             / 1e9
-        )  # 单位：GB/s
+        )  # GB/s
 
         # Print results
         print("\n" + "=" * 70)
         print("Benchmark Results")
         print("=" * 70)
-        print(f"Quant mode: FP8 (E4M3) with {fp8_group_size}x{fp8_group_size} block scaling")
+        print(f"Quant mode: Native BF16 (no quantization)")
         print(f"Total time: {total_time:.4f} s")
         print(f"Iterations: {test_iter}")
         print(f"Time per iteration: {time_per_iter_us:.2f} us")
@@ -255,7 +234,7 @@ def bench_fp8_moe():
         # Record results
         result = {
             "test_name": os.path.basename(__file__),
-            "quant_mode": "fp8_e4m3",
+            "quant_mode": "bf16_native",
             "total_time_seconds": total_time,
             "iterations": test_iter,
             "time_per_iteration_us": time_per_iter_us,
@@ -267,7 +246,6 @@ def bench_fp8_moe():
                 "hidden_size": hidden_size,
                 "intermediate_size": intermediate_size,
                 "num_experts_per_tok": num_experts_per_tok,
-                "fp8_group_size": fp8_group_size,
                 "layer_num": layer_num,
                 "qlen": qlen,
                 "warm_up_iter": warm_up_iter,
@@ -283,4 +261,4 @@ def bench_fp8_moe():
 
 
 if __name__ == "__main__":
-    bench_fp8_moe()
+    bench_bf16_moe()
