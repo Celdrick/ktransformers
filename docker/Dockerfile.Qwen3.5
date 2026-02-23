@@ -266,6 +266,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && cd /workspace/sglang \
     && /opt/miniconda3/envs/serve/bin/pip install -e "python[all]" --extra-index-url https://download.pytorch.org/whl/cu${CUINDEX}
 
+#Qwen3.5 Fix sglang
+RUN /opt/miniconda3/envs/serve/bin/pip install nvidia-cudnn-cu12==9.16.0.29
+
 # Download FlashInfer cubin for serve env
 RUN --mount=type=cache,target=/root/.cache/pip \
     FLASHINFER_CUBIN_DOWNLOAD_THREADS=${BUILD_AND_DOWNLOAD_PARALLEL} FLASHINFER_LOGGING_LEVEL=warning \
