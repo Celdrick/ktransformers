@@ -48,6 +48,8 @@ jobs:
           swap-size-mb: 128
           remove-dotnet: 'true'
           remove-haskell: 'true'
+          remove-android: 'true'
+          remove-codeql: 'true'
           build-mount-path: '/var/lib/docker/'
     
       - name: Restart docker
@@ -73,20 +75,43 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Before freeing up disk space
+        run: |
+          echo "Before freeing up disk space"
+          echo "=============================================================================="
+          df -hT
+          echo "=============================================================================="
+
+      # 增加可用磁盘空间
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 2048
+          swap-size-mb: 128
+          remove-dotnet: 'true'
+          remove-haskell: 'true'
+          remove-android: 'true'
+          remove-codeql: 'true'
+          build-mount-path: '/var/lib/docker/'
+
+      - name: Restart docker
+        run: sudo service docker restart
+
+      - name: Free up disk space complete
+        run: |
+          echo "Free up disk space complete"
+          echo "=============================================================================="
+          df -hT
+          echo "=============================================================================="
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Move Docker data directory
+      - name: Clean Docker system
         run: |
-          sudo systemctl stop docker
-          sudo mkdir -p /mnt/docker
-          sudo rsync -avz /var/lib/docker/ /mnt/docker
-          sudo rm -rf /var/lib/docker
-          sudo ln -s /mnt/docker /var/lib/docker
-          sudo systemctl start docker
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+          docker system prune -a -f --volumes
+          echo "Docker cleanup complete"
+          df -hT
 
       - name: Login to Docker Hub
         if: github.event_name == 'release' || inputs.push_to_dockerhub == true
@@ -139,17 +164,20 @@ jobs:
 
       - name: Build Docker image
         run: |
+          echo "Before Docker build"
+          df -hT
+          
           cd docker
 
           # Extract CUDA short version
           CUDA_SHORT=$(echo "${{ steps.params.outputs.cuda_version }}" | sed 's/\.//g' | cut -c1-4)
 
-          # Build arguments
+          # Build arguments (reduce parallel downloads to save space)
           BUILD_ARGS=(
             --build-arg CUDA_VERSION=${{ steps.params.outputs.cuda_version }}
             --build-arg UBUNTU_MIRROR=${{ steps.params.outputs.ubuntu_mirror }}
             --build-arg GITHUB_ARTIFACTORY=github.com
-            --build-arg BUILD_AND_DOWNLOAD_PARALLEL=8
+            --build-arg BUILD_AND_DOWNLOAD_PARALLEL=4
           )
 
           # Add HTTP proxy if available
