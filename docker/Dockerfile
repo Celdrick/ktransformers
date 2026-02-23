@@ -213,9 +213,9 @@ RUN conda create -n serve python=3.12 -y \
 #     && /opt/miniconda3/envs/fine-tune/bin/pip config set global.index-url https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
 
 # Clone repositories
-# Use kvcache-ai/sglang fork with kimi_k2 branch
+# Use kvcache-ai/sglang fork with main branch
 RUN git clone https://${GITHUB_ARTIFACTORY}/kvcache-ai/sglang.git /workspace/sglang \
-    && cd /workspace/sglang && git checkout kimi_k2
+    && cd /workspace/sglang && git checkout main
 
 RUN git clone --depth 1 https://${GITHUB_ARTIFACTORY}/hiyouga/LLaMA-Factory.git /workspace/LLaMA-Factory \
     && git clone --depth 1 https://${GITHUB_ARTIFACTORY}/kvcache-ai/ktransformers.git /workspace/ktransformers \
