@@ -1,0 +1,226 @@
+ARG CUDA_VERSION=12.8.1
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-devel-ubuntu24.04 AS base
+
+ARG TARGETARCH
+
+# Proxy settings for build-time network access
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG http_proxy
+ARG https_proxy
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    http_proxy=${http_proxy} \
+    https_proxy=${https_proxy}
+
+ARG BUILD_AND_DOWNLOAD_PARALLEL=8
+ARG UBUNTU_MIRROR
+ARG GITHUB_ARTIFACTORY=github.com
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda
+
+# Add GKE default lib and bin locations
+ENV PATH="${PATH}:/usr/local/nvidia/bin" \
+    LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64"
+
+# Install system dependencies
+RUN --mount=type=cache,target=/var/cache/apt,id=qwen35-apt \
+    echo 'tzdata tzdata/Areas select America' | debconf-set-selections \
+    && echo 'tzdata tzdata/Zones/America select Los_Angeles' | debconf-set-selections \
+    && apt-get update && apt-get install -y --no-install-recommends --allow-change-held-packages \
+    # Core system utilities
+    tzdata \
+    ca-certificates \
+    software-properties-common \
+    netcat-openbsd \
+    kmod \
+    unzip \
+    openssh-server \
+    curl \
+    wget \
+    lsof \
+    locales \
+    # Build essentials
+    build-essential \
+    cmake \
+    perl \
+    patchelf \
+    ccache \
+    git \
+    git-lfs \
+    # MPI and NUMA
+    libopenmpi-dev \
+    libnuma1 \
+    libnuma-dev \
+    numactl \
+    # transformers multimodal VLM
+    ffmpeg \
+    # Development libraries
+    libgoogle-glog-dev \
+    libgtest-dev \
+    libjsoncpp-dev \
+    libunwind-dev \
+    libboost-all-dev \
+    libssl-dev \
+    pybind11-dev \
+    libhiredis-dev \
+    libcurl4-openssl-dev \
+    # Development tools
+    gdb \
+    ninja-build \
+    vim \
+    tmux \
+    htop \
+    zsh \
+    tree \
+    less \
+    # NCCL
+    libnccl2 \
+    libnccl-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Set up locale
+RUN locale-gen en_US.UTF-8
+ENV LANG=en_US.UTF-8 \
+    LANGUAGE=en_US:en \
+    LC_ALL=en_US.UTF-8
+
+########################################################
+########## Install Miniconda ###########################
+########################################################
+
+RUN mkdir -p /opt/miniconda3 \
+    && wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /opt/miniconda3/miniconda.sh \
+    && bash /opt/miniconda3/miniconda.sh -b -u -p /opt/miniconda3 \
+    && rm /opt/miniconda3/miniconda.sh
+
+# Add conda to PATH
+ENV PATH="/opt/miniconda3/bin:${PATH}"
+
+# Accept conda TOS
+RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main \
+    && conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+
+########################################################
+########## Qwen3.5 Environment Setup ###################
+########################################################
+
+FROM base AS qwen35-env
+
+ARG CUDA_VERSION
+ARG BUILD_AND_DOWNLOAD_PARALLEL
+ARG GITHUB_ARTIFACTORY
+
+WORKDIR /workspace
+
+# Create conda environment with Python 3.12
+RUN conda create -n qwen35 python=3.12 -y
+
+# Clone ktransformers repository (qwen3.5 branch)
+RUN git clone https://${GITHUB_ARTIFACTORY}/kvcache-ai/ktransformers.git /workspace/ktransformers \
+    && cd /workspace/ktransformers \
+    && git checkout qwen3.5 \
+    && git submodule update --init --recursive
+
+# Clone SGLang repository (qwen3.5 branch)
+RUN git clone https://${GITHUB_ARTIFACTORY}/kvcache-ai/sglang.git /workspace/sglang \
+    && cd /workspace/sglang \
+    && git checkout qwen3.5
+
+########################################################
+# Install SGLang with dependencies
+########################################################
+
+# Upgrade pip and install basic tools
+RUN --mount=type=cache,target=/root/.cache/pip \
+    /opt/miniconda3/envs/qwen35/bin/pip install --upgrade pip setuptools wheel
+
+# Install PyTorch with CUDA support
+RUN --mount=type=cache,target=/root/.cache/pip \
+    case "$CUDA_VERSION" in \
+        12.6.1) CUINDEX=126 ;; \
+        12.8.1) CUINDEX=128 ;; \
+        12.9.1) CUINDEX=129 ;; \
+        13.0.1) CUINDEX=130 ;; \
+        *) echo "Unsupported CUDA version: $CUDA_VERSION" && exit 1 ;; \
+    esac \
+    && /opt/miniconda3/envs/qwen35/bin/pip install \
+        torch \
+        torchvision \
+        torchaudio \
+        --extra-index-url https://download.pytorch.org/whl/cu${CUINDEX}
+
+# Install SGLang from source
+RUN --mount=type=cache,target=/root/.cache/pip \
+    cd /workspace/sglang \
+    && /opt/miniconda3/envs/qwen35/bin/pip install -e "python[all]"
+
+# Install nvidia-cudnn-cu12 (required for SGLang with Qwen3.5)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    /opt/miniconda3/envs/qwen35/bin/pip install nvidia-cudnn-cu12==9.16.0.29
+
+########################################################
+# Install KT-Kernel
+########################################################
+
+# Install KT-Kernel with AVX512F support
+RUN . /opt/miniconda3/etc/profile.d/conda.sh && conda activate qwen35 \
+    && cd /workspace/ktransformers/kt-kernel \
+    && CPUINFER_CPU_INSTRUCT=AVX512 CPUINFER_ENABLE_AMX=ON ./install.sh build --manual
+
+# Install NCCL
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "${CUDA_VERSION%%.*}" = "12" ]; then \
+        /opt/miniconda3/envs/qwen35/bin/pip install nvidia-nccl-cu12 --force-reinstall --no-deps ; \
+    elif [ "${CUDA_VERSION%%.*}" = "13" ]; then \
+        /opt/miniconda3/envs/qwen35/bin/pip install nvidia-nccl-cu13 --force-reinstall --no-deps ; \
+    fi
+
+# Install huggingface-hub for model downloading
+RUN --mount=type=cache,target=/root/.cache/pip \
+    /opt/miniconda3/envs/qwen35/bin/pip install huggingface-hub
+
+########################################################
+# Extract version information
+########################################################
+
+RUN set -x && \
+    # SGLang version
+    cd /workspace/sglang/python/sglang && \
+    . /opt/miniconda3/etc/profile.d/conda.sh && conda activate qwen35 && \
+    SGLANG_VERSION=$(python -c "exec(open('version.py').read()); print(__version__)" 2>/dev/null || echo "unknown") && \
+    echo "SGLANG_VERSION=$SGLANG_VERSION" > /workspace/versions.env && \
+    echo "Extracted SGLang version: $SGLANG_VERSION" && \
+    \
+    # KTransformers version
+    cd /workspace/ktransformers && \
+    KTRANSFORMERS_VERSION=$(python -c "exec(open('version.py').read()); print(__version__)" 2>/dev/null || echo "unknown") && \
+    echo "KTRANSFORMERS_VERSION=$KTRANSFORMERS_VERSION" >> /workspace/versions.env && \
+    echo "Extracted KTransformers version: $KTRANSFORMERS_VERSION" && \
+    \
+    # Display all versions
+    echo "=== Version Summary ===" && \
+    cat /workspace/versions.env
+
+########################################################
+# Final setup
+########################################################
+
+# Initialize conda for bash
+RUN /opt/miniconda3/bin/conda init bash
+
+# Create shell alias for convenience
+RUN echo '\n# Conda environment alias\nalias qwen35="conda activate qwen35"' >> /root/.bashrc
+
+# Create model directory
+RUN mkdir -p /workspace/models
+
+WORKDIR /workspace
+
+# Set default conda environment
+ENV CONDA_DEFAULT_ENV=qwen35
+
+CMD ["/bin/bash"]
+

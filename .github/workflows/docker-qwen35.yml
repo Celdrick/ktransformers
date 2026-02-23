@@ -1,0 +1,212 @@
+name: Qwen3.5 Docker CI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      push_to_dockerhub:
+        description: 'Push image to DockerHub? (true/false)'
+        required: true
+        default: 'false'
+        type: boolean
+      cuda_version:
+        description: 'CUDA version (e.g., 12.8.1)'
+        required: false
+        default: '12.8.1'
+        type: string
+      ubuntu_mirror:
+        description: 'Use Tsinghua Ubuntu mirror? (0/1)'
+        required: false
+        default: '0'
+        type: string
+      image_tag:
+        description: 'Custom image tag (optional, defaults to qwen3.5-vYYYYMMDD)'
+        required: false
+        default: ''
+        type: string
+
+env:
+  DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/ktransformers
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Before freeing up disk space
+        run: |
+          echo "Before freeing up disk space"
+          echo "=============================================================================="
+          df -hT
+          echo "=============================================================================="
+    
+      # 增加可用磁盘空间
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 2048
+          swap-size-mb: 128
+          remove-dotnet: 'true'
+          remove-haskell: 'true'
+          build-mount-path: '/var/lib/docker/'
+    
+      - name: Restart docker
+        run: sudo service docker restart
+    
+      - name: Free up disk space complete
+        run: |
+          echo "Free up disk space complete"
+          echo "=============================================================================="
+          df -hT
+          echo "=============================================================================="
+  
+      - name: Checkout Code
+        uses: actions/checkout@v4                              
+    
+      - name: Run build test
+        run: |
+          docker build . --file docker/Dockerfile.Qwen3.5
+
+  build-and-push:
+    needs: test
+    name: Build and Push Qwen3.5 Docker Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Move Docker data directory
+        run: |
+          sudo systemctl stop docker
+          sudo mkdir -p /mnt/docker
+          sudo rsync -avz /var/lib/docker/ /mnt/docker
+          sudo rm -rf /var/lib/docker
+          sudo ln -s /mnt/docker /var/lib/docker
+          sudo systemctl start docker
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: github.event_name == 'release' || inputs.push_to_dockerhub == true
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Determine build parameters
+        id: params
+        run: |
+          # Determine if we should push
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "should_push=true" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_push=${{ inputs.push_to_dockerhub }}" >> $GITHUB_OUTPUT
+          else
+            echo "should_push=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Determine CUDA version
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.cuda_version }}" ]; then
+            echo "cuda_version=${{ inputs.cuda_version }}" >> $GITHUB_OUTPUT
+          else
+            echo "cuda_version=12.8.1" >> $GITHUB_OUTPUT
+          fi
+
+          # Determine Ubuntu mirror setting
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.ubuntu_mirror }}" ]; then
+            echo "ubuntu_mirror=${{ inputs.ubuntu_mirror }}" >> $GITHUB_OUTPUT
+          else
+            echo "ubuntu_mirror=0" >> $GITHUB_OUTPUT
+          fi
+
+          # Determine image tag
+          if [ "${{ github.event_name }}" = "release" ]; then
+            # For releases, use the release tag
+            echo "image_tag=qwen3.5-${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.image_tag }}" ]; then
+            # Use custom tag if provided
+            echo "image_tag=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+          else
+            # Default to date-based tag
+            echo "image_tag=qwen3.5-v$(date +%Y%m%d)" >> $GITHUB_OUTPUT
+          fi
+
+          # Extract CUDA short version (e.g., 12.8.1 -> cu128)
+          CUDA_SHORT=$(echo "${{ steps.params.outputs.cuda_version || '12.8.1' }}" | sed 's/\.//g' | cut -c1-4)
+          echo "cuda_short=cu${CUDA_SHORT}" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        run: |
+          cd docker
+
+          # Extract CUDA short version
+          CUDA_SHORT=$(echo "${{ steps.params.outputs.cuda_version }}" | sed 's/\.//g' | cut -c1-4)
+
+          # Build arguments
+          BUILD_ARGS=(
+            --build-arg CUDA_VERSION=${{ steps.params.outputs.cuda_version }}
+            --build-arg UBUNTU_MIRROR=${{ steps.params.outputs.ubuntu_mirror }}
+            --build-arg GITHUB_ARTIFACTORY=github.com
+            --build-arg BUILD_AND_DOWNLOAD_PARALLEL=8
+          )
+
+          # Add HTTP proxy if available
+          if [ -n "${{ secrets.HTTP_PROXY }}" ]; then
+            BUILD_ARGS+=(--build-arg HTTP_PROXY="${{ secrets.HTTP_PROXY }}")
+            BUILD_ARGS+=(--build-arg http_proxy="${{ secrets.HTTP_PROXY }}")
+          fi
+
+          # Add HTTPS proxy if available
+          if [ -n "${{ secrets.HTTPS_PROXY }}" ]; then
+            BUILD_ARGS+=(--build-arg HTTPS_PROXY="${{ secrets.HTTPS_PROXY }}")
+            BUILD_ARGS+=(--build-arg https_proxy="${{ secrets.HTTPS_PROXY }}")
+          fi
+
+          # Tags to apply
+          TAGS=(
+            -t ${{ env.DOCKERHUB_REPO }}:${{ steps.params.outputs.image_tag }}-cu${CUDA_SHORT}
+            -t ${{ env.DOCKERHUB_REPO }}:qwen3.5-latest
+          )
+
+          # Build the image
+          docker build \
+            "${BUILD_ARGS[@]}" \
+            "${TAGS[@]}" \
+            -f Dockerfile.Qwen3.5 \
+            ..
+
+      - name: Push Docker image
+        if: steps.params.outputs.should_push == 'true'
+        run: |
+          # Extract CUDA short version
+          CUDA_SHORT=$(echo "${{ steps.params.outputs.cuda_version }}" | sed 's/\.//g' | cut -c1-4)
+
+          # Push versioned tag
+          docker push ${{ env.DOCKERHUB_REPO }}:${{ steps.params.outputs.image_tag }}-cu${CUDA_SHORT}
+
+          # Push latest tag
+          docker push ${{ env.DOCKERHUB_REPO }}:qwen3.5-latest
+
+      - name: Extract and display version information
+        run: |
+          # Run container and extract version info
+          CONTAINER_ID=$(docker run -d ${{ env.DOCKERHUB_REPO }}:qwen3.5-latest sleep 60)
+          docker exec $CONTAINER_ID cat /workspace/versions.env || echo "Could not extract versions"
+          docker stop $CONTAINER_ID
+          docker rm $CONTAINER_ID
+
+      - name: Display image information
+        if: steps.params.outputs.should_push == 'true'
+        run: |
+          CUDA_SHORT=$(echo "${{ steps.params.outputs.cuda_version }}" | sed 's/\.//g' | cut -c1-4)
+          echo "::notice title=Docker Image::Qwen3.5 image pushed successfully to ${{ env.DOCKERHUB_REPO }}"
+          echo "::notice title=Pull Command::docker pull ${{ env.DOCKERHUB_REPO }}:${{ steps.params.outputs.image_tag }}-cu${CUDA_SHORT}"
+          echo "::notice title=Latest Tag::docker pull ${{ env.DOCKERHUB_REPO }}:qwen3.5-latest"
+
+      - name: Test run notice
+        if: steps.params.outputs.should_push != 'true'
+        run: |
+          echo "::notice title=Test Build::Image was built successfully but not pushed (dry run mode)"
+
