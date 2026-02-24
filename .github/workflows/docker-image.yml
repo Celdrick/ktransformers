@@ -79,7 +79,7 @@ jobs:
   #         fi
 
   build-and-push:
-    needs: test
+    # needs: test
     name: Build and Push Multi-Variant Docker Image
     runs-on: ubuntu-latest
 
