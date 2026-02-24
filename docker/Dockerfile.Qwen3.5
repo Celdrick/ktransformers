@@ -315,7 +315,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Install kt-kernel in serve env with all CPU variants
 RUN . /opt/miniconda3/etc/profile.d/conda.sh && conda activate serve \
     && cd /workspace/ktransformers/kt-kernel \
-    && CPUINFER_CPU_INSTRUCT=AVX512 CPUINFER_ENABLE_AMX=ON ./install.sh build --manual
+    && CPUINFER_CPU_INSTRUCT=AVX512 CPUINFER_ENABLE_AMX=ON CPUINFER_ENABLE_AVX512_VNNI=ON CPUINFER_ENABLE_AVX512_BF16=ON ./install.sh build --manual
 
 #Qwen3.5 Fix sglang
 RUN /opt/miniconda3/envs/serve/bin/pip install nvidia-cudnn-cu12==9.16.0.29
