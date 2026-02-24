@@ -266,9 +266,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && cd /workspace/sglang \
     && /opt/miniconda3/envs/serve/bin/pip install -e "python[all]" --extra-index-url https://download.pytorch.org/whl/cu${CUINDEX}
 
-#Qwen3.5 Fix sglang
-RUN /opt/miniconda3/envs/serve/bin/pip install nvidia-cudnn-cu12==9.16.0.29
-
 # Download FlashInfer cubin for serve env
 RUN --mount=type=cache,target=/root/.cache/pip \
     FLASHINFER_CUBIN_DOWNLOAD_THREADS=${BUILD_AND_DOWNLOAD_PARALLEL} FLASHINFER_LOGGING_LEVEL=warning \
@@ -320,49 +317,52 @@ RUN . /opt/miniconda3/etc/profile.d/conda.sh && conda activate serve \
     && cd /workspace/ktransformers/kt-kernel \
     && CPUINFER_CPU_INSTRUCT=AVX512 CPUINFER_ENABLE_AMX=ON ./install.sh build --manual
 
+#Qwen3.5 Fix sglang
+RUN /opt/miniconda3/envs/serve/bin/pip install nvidia-cudnn-cu12==9.16.0.29
+
 ########################################################
-# Environment 2: fine-tune (LLaMA-Factory + ktransformers)
-########################################################
+# # Environment 2: fine-tune (LLaMA-Factory + ktransformers)
+# ########################################################
 
-# Install dependency libraries for ktransformers (CUDA 11.8 runtime required)
-RUN conda install -n fine-tune -y -c conda-forge libstdcxx-ng gcc_impl_linux-64 \
-    && conda install -n fine-tune -y -c nvidia/label/cuda-11.8.0 cuda-runtime
+# # Install dependency libraries for ktransformers (CUDA 11.8 runtime required)
+# RUN conda install -n fine-tune -y -c conda-forge libstdcxx-ng gcc_impl_linux-64 \
+#     && conda install -n fine-tune -y -c nvidia/label/cuda-11.8.0 cuda-runtime
 
-# Install PyTorch 2.8 in fine-tune env
-RUN --mount=type=cache,target=/root/.cache/pip \
-    case "$CUDA_VERSION" in \
-        12.6.1) CUINDEX=126 ;; \
-        12.8.1) CUINDEX=128 ;; \
-        12.9.1) CUINDEX=129 ;; \
-        13.0.1) CUINDEX=130 ;; \
-    esac \
-    && /opt/miniconda3/envs/fine-tune/bin/pip install --upgrade pip setuptools wheel \
-    && /opt/miniconda3/envs/fine-tune/bin/pip install \
-        torch==2.8.0 \
-        torchvision \
-        torchaudio \
-        --extra-index-url https://download.pytorch.org/whl/cu${CUINDEX}
+# # Install PyTorch 2.8 in fine-tune env
+# RUN --mount=type=cache,target=/root/.cache/pip \
+#     case "$CUDA_VERSION" in \
+#         12.6.1) CUINDEX=126 ;; \
+#         12.8.1) CUINDEX=128 ;; \
+#         12.9.1) CUINDEX=129 ;; \
+#         13.0.1) CUINDEX=130 ;; \
+#     esac \
+#     && /opt/miniconda3/envs/fine-tune/bin/pip install --upgrade pip setuptools wheel \
+#     && /opt/miniconda3/envs/fine-tune/bin/pip install \
+#         torch==2.8.0 \
+#         torchvision \
+#         torchaudio \
+#         --extra-index-url https://download.pytorch.org/whl/cu${CUINDEX}
 
-# Install LLaMA-Factory in fine-tune env
-RUN --mount=type=cache,target=/root/.cache/pip \
-    cd /workspace/LLaMA-Factory \
-    && /opt/miniconda3/envs/fine-tune/bin/pip install -e ".[torch,metrics]"
+# # Install LLaMA-Factory in fine-tune env
+# RUN --mount=type=cache,target=/root/.cache/pip \
+#     cd /workspace/LLaMA-Factory \
+#     && /opt/miniconda3/envs/fine-tune/bin/pip install -e ".[torch,metrics]"
 
-# Install ktransformers wheel in fine-tune env
-RUN --mount=type=cache,target=/root/.cache/pip \
-    /opt/miniconda3/envs/fine-tune/bin/pip install /workspace/${KTRANSFORMERS_WHEEL}
+# # Install ktransformers wheel in fine-tune env
+# RUN --mount=type=cache,target=/root/.cache/pip \
+#     /opt/miniconda3/envs/fine-tune/bin/pip install /workspace/${KTRANSFORMERS_WHEEL}
 
-# Install flash_attn wheel in fine-tune env
-RUN --mount=type=cache,target=/root/.cache/pip \
-    /opt/miniconda3/envs/fine-tune/bin/pip install /workspace/${FLASH_ATTN_WHEEL}
+# # Install flash_attn wheel in fine-tune env
+# RUN --mount=type=cache,target=/root/.cache/pip \
+#     /opt/miniconda3/envs/fine-tune/bin/pip install /workspace/${FLASH_ATTN_WHEEL}
 
-# Install NCCL for fine-tune env
-RUN --mount=type=cache,target=/root/.cache/pip \
-    if [ "${CUDA_VERSION%%.*}" = "12" ]; then \
-        /opt/miniconda3/envs/fine-tune/bin/pip install nvidia-nccl-cu12==2.28.3 --force-reinstall --no-deps ; \
-    elif [ "${CUDA_VERSION%%.*}" = "13" ]; then \
-        /opt/miniconda3/envs/fine-tune/bin/pip install nvidia-nccl-cu13==2.28.3 --force-reinstall --no-deps ; \
-    fi
+# # Install NCCL for fine-tune env
+# RUN --mount=type=cache,target=/root/.cache/pip \
+#     if [ "${CUDA_VERSION%%.*}" = "12" ]; then \
+#         /opt/miniconda3/envs/fine-tune/bin/pip install nvidia-nccl-cu12==2.28.3 --force-reinstall --no-deps ; \
+#     elif [ "${CUDA_VERSION%%.*}" = "13" ]; then \
+#         /opt/miniconda3/envs/fine-tune/bin/pip install nvidia-nccl-cu13==2.28.3 --force-reinstall --no-deps ; \
+#     fi
 
 ########################################################
 # Cleanup and final setup
