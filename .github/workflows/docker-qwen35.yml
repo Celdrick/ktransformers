@@ -50,7 +50,7 @@ jobs:
           remove-haskell: 'true'
           remove-android: 'true'
           remove-codeql: 'true'
-          # build-mount-path: '/var/lib/docker/'
+          build-mount-path: '/var/lib/docker/'
     
       - name: Restart docker
         run: sudo service docker restart
