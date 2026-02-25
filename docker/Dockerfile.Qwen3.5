@@ -315,10 +315,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Install kt-kernel in serve env with all CPU variants
 RUN . /opt/miniconda3/etc/profile.d/conda.sh && conda activate serve \
     && cd /workspace/ktransformers/kt-kernel \
-    && CPUINFER_CPU_INSTRUCT=AVX512 CPUINFER_ENABLE_AMX=OFF CPUINFER_ENABLE_AVX512_VNNI=ON CPUINFER_ENABLE_AVX512_BF16=ON CPUINFER_ENABLE_AVX512_VBMI=ON KT_KERNEL_CPU_VARIANT=avx512 ./install.sh all --manual
+    && CPUINFER_CPU_INSTRUCT=AVX512 CPUINFER_ENABLE_AMX=ON CPUINFER_ENABLE_AVX512_VNNI=ON CPUINFER_ENABLE_AVX512_BF16=ON CPUINFER_ENABLE_AVX512_VBMI=ON KT_KERNEL_CPU_VARIANT=avx512 ./install.sh all --manual
 
 #Qwen3.5 Fix sglang
-#RUN /opt/miniconda3/envs/serve/bin/pip install nvidia-cudnn-cu12==9.16.0.29
+RUN /opt/miniconda3/envs/serve/bin/pip install nvidia-cudnn-cu12==9.16.0.29
+RUN /opt/miniconda3/envs/serve/bin/pip install git+https://github.com/huggingface/transformers.git
+RUN /opt/miniconda3/envs/serve/bin/pip list
 
 ########################################################
 # # Environment 2: fine-tune (LLaMA-Factory + ktransformers)
@@ -395,13 +397,13 @@ RUN set -x && \
     echo "KTRANSFORMERS_VERSION=$KTRANSFORMERS_VERSION" >> /workspace/versions.env && \
     echo "Extracted KTransformers version: $KTRANSFORMERS_VERSION" && \
     \
-    # LLaMA-Factory version (from fine-tune environment)
-    . /opt/miniconda3/etc/profile.d/conda.sh && conda activate fine-tune && \
-    cd /workspace/LLaMA-Factory && \
-    LLAMAFACTORY_VERSION=$(python -c "import sys; sys.path.insert(0, 'src'); from llamafactory import __version__; print(__version__)" 2>/dev/null || echo "unknown") && \
-    echo "LLAMAFACTORY_VERSION=$LLAMAFACTORY_VERSION" >> /workspace/versions.env && \
-    echo "Extracted LLaMA-Factory version: $LLAMAFACTORY_VERSION" && \
-    \
+    # # LLaMA-Factory version (from fine-tune environment)
+    # . /opt/miniconda3/etc/profile.d/conda.sh && conda activate fine-tune && \
+    # cd /workspace/LLaMA-Factory && \
+    # LLAMAFACTORY_VERSION=$(python -c "import sys; sys.path.insert(0, 'src'); from llamafactory import __version__; print(__version__)" 2>/dev/null || echo "unknown") && \
+    # echo "LLAMAFACTORY_VERSION=$LLAMAFACTORY_VERSION" >> /workspace/versions.env && \
+    # echo "Extracted LLaMA-Factory version: $LLAMAFACTORY_VERSION" && \
+    # \
     # Display all versions
     echo "=== Version Summary ===" && \
     cat /workspace/versions.env
